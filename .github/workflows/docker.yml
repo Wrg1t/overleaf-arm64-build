@@ -34,6 +34,7 @@ jobs:
 
     - name: Build Docker image for ARM64
       run: |
+        mkdir -p /tmp/.buildx-cache
         cd server-ce
         make build-base
         make build-community
