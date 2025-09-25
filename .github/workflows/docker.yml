@@ -1,0 +1,49 @@
+name: Build ARM64 ShareLaTeX Docker Image
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04-arm
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v2
+
+    - name: Cache Docker layers
+      uses: actions/cache@v3
+      with:
+        path: /tmp/.buildx-cache
+        key: ${{ runner.os }}-docker-${{ github.sha }}
+        restore-keys: |
+          ${{ runner.os }}-docker-
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y make
+
+    - name: Build Docker image for ARM64
+      run: |
+        cd server-ce
+        make build-base
+        make build-community
+
+    - name: Save Docker image as tarball
+      run: |
+        docker save sharelatex/sharelatex:main -o overleaf-arm64.tar
+
+    - name: Upload Docker image as artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: overleaf-arm64-image
+        path: overleaf-arm64.tar
