@@ -37,7 +37,9 @@ pipeline {
     OVERLEAF_LATEST = "us-east1-docker.pkg.dev/overleaf-ops/ol-docker/overleaf-internal:main"
     OVERLEAF_TAG = "us-east1-docker.pkg.dev/overleaf-ops/ol-docker/overleaf-internal:${BRANCH_NAME}-${SHORT_SHA}_${BUILD_ID}"
     IMAGE_TAG_CE = "${OVERLEAF_TAG}"
-    IMAGE_TAG_PRO = "us-east1-docker.pkg.dev/overleaf-ops/ol-docker/pro:main"
+    IMAGE_TAG_PRO = "us-east1-docker.pkg.dev/overleaf-ops/ol-docker/pro:${BRANCH_NAME}-${SHORT_SHA}_${BUILD_ID}"
+    OVERLEAF_PRO_TAG_BRANCH = "us-east1-docker.pkg.dev/overleaf-ops/ol-docker/pro-internal:${BRANCH_NAME}"
+    OVERLEAF_PRO_TAG_LATEST = "us-east1-docker.pkg.dev/overleaf-ops/ol-docker/pro-internal:main"
   }
   stages {
     // Retries will use the same pipeline instance. Reset the vars.
@@ -51,14 +53,18 @@ pipeline {
           job_server_ce_build_done = false
           job_server_pro_build_done = false
         }
+        // Reset the results folder.
+        // Use a folder that is not managed by cypress, as cypress will clear its results folder at the start of each individual run.
+        // I.e. we would loose the test results from finished/running test suites when the last test suite starts.
+        sh 'rm -rf server-ce/test/cypress-reports/'
+        sh 'mkdir -p server-ce/test/cypress-reports/'
       }
     }
     stage('Parallel') {
       parallel {
         stage('Install deps') {
           steps {
-            sh 'make install -j10'
-            sh 'make -C server-ce/test npm_install_in_docker'
+            sh 'make monorepo_setup'
             script {
               job_npm_install_done = true
             }
@@ -78,9 +84,7 @@ pipeline {
                 return job_npm_install_done
               }
             }
-            dir('server-ce/test') {
-              sh 'make format_in_docker'
-            }
+            sh 'bin/run -w /overleaf/server-ce/test monorepo npm run format'
           }
         }
         stage('Copybara') {
@@ -135,6 +139,18 @@ pipeline {
             }
             script {
               job_server_pro_build_done = true
+            }
+          }
+        }
+        stage('Push Pro to internal') {
+          steps {
+            script {
+              waitUntil {
+                return job_server_pro_build_done
+              }
+            }
+            dir('server-pro') {
+              sh 'make push_branch'
             }
           }
         }
@@ -286,16 +302,39 @@ pipeline {
             }
           }
         }
+        stage('PRO custom 5') {
+          environment {
+            CYPRESS_SHARD = "PRO_CUSTOM_5"
+            COMPOSE_PROJECT_NAME = "test-pro-custom-5"
+          }
+          steps {
+            script {
+              waitUntil {
+                return job_npm_install_done && job_server_pro_build_done && job_prefetch_default_done && job_prefetch_custom_done
+              }
+            }
+            dir('server-ce/test') {
+              sh 'make test-e2e'
+            }
+          }
+        }
       }
     }
   }
   post {
+    // Collect junit test results for both success and failure case.
+    always {
+      junit checksName: 'Server Pro E2E test results', testResults: 'server-ce/test/cypress-reports/junit-*.xml'
+    }
     // Ensure tear down of test containers, remove CE docker images, then run general Jenkins VM cleanup.
     cleanup {
       dir('server-ce/test') {
-        sh 'make clean'
+        sh 'make clean -j10'
       }
       dir('server-ce') {
+        sh 'make clean'
+      }
+      dir('server-pro') {
         sh 'make clean'
       }
       sh 'make clean_jenkins'

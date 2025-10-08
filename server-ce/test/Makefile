@@ -5,6 +5,7 @@ all: test-e2e
 # We need to have both file-system layouts agree on the path for the docker compose project.
 # Notable the container labels com.docker.compose.project.working_dir and com.docker.compose.project.config_files need to match when creating containers from the docker host (how you started things) and from host-admin (how tests reconfigure the instance).
 export PWD = $(shell pwd)
+export MONOREPO = $(shell cd ../../ && pwd)
 
 export TEX_LIVE_DOCKER_IMAGE ?= us-east1-docker.pkg.dev/overleaf-ops/ol-docker/texlive-full:2023.1
 export ALL_TEX_LIVE_DOCKER_IMAGES ?= us-east1-docker.pkg.dev/overleaf-ops/ol-docker/texlive-full:2023.1,us-east1-docker.pkg.dev/overleaf-ops/ol-docker/texlive-full:2022.1
@@ -13,6 +14,7 @@ export IMAGE_TAG_PRO ?= us-east1-docker.pkg.dev/overleaf-ops/ol-docker/pro:main
 export CYPRESS_SHARD ?=
 export COMPOSE_PROJECT_NAME ?= test
 export DOCKER_USER := $(shell id -u):$(shell id -g)
+IMAGE_TAG_PRO_BASE := $(shell echo $(IMAGE_TAG_PRO) | sed -E s/:.+//)
 
 test-e2e-native:
 	docker compose -f docker-compose.yml -f docker-compose.native.yml up --no-log-prefix sharelatex host-admin -d
@@ -24,13 +26,13 @@ test-e2e-native:
 test-e2e:
 	docker compose build host-admin
 	docker compose up --detach --wait host-admin
-	docker compose up --detach --wait mongo || { docker compose logs mongo; exit 42; }
-	docker compose up --no-log-prefix --exit-code-from=e2e e2e host-admin || { docker compose logs mongo; exit 42; }
+	docker compose up --detach --wait mongo
+	docker compose up --no-log-prefix --exit-code-from=e2e e2e host-admin
 
 test-e2e-open:
 	docker compose up --detach --wait host-admin
-	docker compose up --detach --wait mongo || { docker compose logs mongo; exit 42; }
-	docker compose up --no-log-prefix --exit-code-from=e2e-open e2e-open host-admin || { docker compose logs mongo; exit 42; }
+	docker compose up --detach --wait mongo
+	docker compose up --no-log-prefix --exit-code-from=e2e-open e2e-open host-admin
 
 SHARD_PROJECT_NAMES = \
 	test-ce-default \
@@ -43,7 +45,7 @@ SHARD_PROJECT_NAMES = \
 	test-pro-custom-4
 CLEAN_SHARDS=$(addprefix clean/,$(SHARD_PROJECT_NAMES))
 clean: $(CLEAN_SHARDS)
-	-docker compose run --no-deps --rm --entrypoint rm host-admin -rf docker-compose.override.yml docker-compose.*_*.yml data/
+	-docker compose run --no-deps --rm --entrypoint rm host-admin -rf docker-compose.override.yml docker-compose.*_*.yml cypress-reports/ data/
 	-docker compose down --remove-orphans --rmi local --timeout 0 --volumes
 
 $(CLEAN_SHARDS): clean/%:
@@ -75,18 +77,18 @@ prefetch_custom_texlive_2022:
 
 prefetch_custom: prefetch_old_4_2
 prefetch_old_4_2:
-	docker pull $(IMAGE_TAG_PRO:main=4.2)
+	docker pull $(IMAGE_TAG_PRO_BASE):4.2
 
 prefetch_custom: prefetch_old_5_0
 prefetch_old_5_0:
-	docker pull $(IMAGE_TAG_PRO:main=5.0.1-RC1)
-	docker pull $(IMAGE_TAG_PRO:main=5.0)
+	docker pull $(IMAGE_TAG_PRO_BASE):5.0.1-RC1
+	docker pull $(IMAGE_TAG_PRO_BASE):5.0
 
 prefetch_custom: build_hotfix_5_5_5
 build_hotfix_5_5_5:
-	docker pull $(IMAGE_TAG_PRO:main=5.5.4)
-	docker tag $(IMAGE_TAG_PRO:main=5.5.4) quay.io/sharelatex/sharelatex-pro:5.5.4
-	cd ../../server-pro/hotfix/5.5.5 && docker build -t $(IMAGE_TAG_PRO:main=5.5.5) .
+	docker pull $(IMAGE_TAG_PRO_BASE):5.5.4
+	docker tag $(IMAGE_TAG_PRO_BASE):5.5.4 quay.io/sharelatex/sharelatex-pro:5.5.4
+	cd ../../server-pro/hotfix/5.5.5 && docker build -t $(IMAGE_TAG_PRO_BASE):5.5.5 .
 
 # Google Cloud Build runs on a very ancient Docker version that does not support the subdir flag.
 # Use services -> mailtrap -> build -> context = https://github.com/dbck/docker-mailtrap.git#v1.5.0:build in docker-compose.yml eventually.
@@ -94,15 +96,5 @@ prefetch_default_compose_build: build_mailtrap
 build_mailtrap:
 	git clone https://github.com/dbck/docker-mailtrap.git || true && cd docker-mailtrap && git checkout v1.5.0
 	docker build -t mailtrap docker-mailtrap/build
-
-npm_install_in_docker: export COMPOSE_PROJECT_NAME=
-npm_install_in_docker:
-	$(MAKE) -C ../../ .metadata/docker-image/monorepo
-	cd ../../ && bin/run --no-deps --workdir /overleaf/server-ce/test monorepo npm --no-dry-run install
-
-format_in_docker: export COMPOSE_PROJECT_NAME=
-format_in_docker:
-	$(MAKE) -C ../../ .metadata/docker-image/monorepo
-	cd ../../ && bin/run --no-deps --workdir /overleaf/server-ce/test monorepo npm run format
 
 .PHONY: test-e2e test-e2e-open
